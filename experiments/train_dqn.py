@@ -1,0 +1,1850 @@
+"""
+DQN one-pick diagnostic training.
+
+Purpose
+-------
+Determine whether the movement-level DQN can learn the simplest
+warehouse-routing task before progressing to larger orders.
+
+Training:
+    - 1-pick orders
+    - uniform distribution
+
+Development evaluation:
+    - fixed unseen 1-pick uniform orders
+    - greedy policy (epsilon = 0)
+    - no replay-buffer insertion
+    - no gradient updates
+    - comparison against exact optimal distance
+
+Diagnostics:
+    - items collected
+    - items remaining
+    - fraction of order collected
+    - completion rate
+    - reward
+    - travel distance
+    - loss
+    - epsilon
+
+This is a DEVELOPMENT experiment, not the final experiment.
+"""
+
+from utils.order_generation import generate_order
+from exact.ratliff_rosenthal import exact_optimal_distance
+from environment.warehouse_env import WarehouseEnv
+from agents.dqn_agent import DQNAgent
+import csv
+import random
+import sys
+import time
+from collections import deque
+from pathlib import Path
+
+import numpy as np
+import torch
+
+
+# ============================================================
+# PROJECT IMPORT PATH
+# ============================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+# ============================================================
+# DEVELOPMENT SETTINGS
+# ============================================================
+
+RUN_NAME = "one_pick_diagnostic"
+
+TRAIN_SEED = 42
+
+TRAIN_EPISODES = 500
+
+# Start with the simplest possible routing problem.
+ORDER_SIZE = 1
+
+TRAIN_DISTRIBUTION = "uniform"
+
+MAX_STEPS = 500
+
+
+# ============================================================
+# DEVELOPMENT EVALUATION SETTINGS
+# ============================================================
+
+DEV_ORDERS = 20
+
+DEV_SEED_START = 50_000
+
+EVALUATE_EVERY = 50
+
+
+# ============================================================
+# DQN HYPERPARAMETERS
+# ============================================================
+#
+# Development values only.
+#
+# Epsilon currently decays after every gradient update,
+# therefore decay is deliberately slow.
+
+LEARNING_RATE = 1e-4
+
+GAMMA = 0.99
+
+EPSILON_START = 1.0
+
+EPSILON_MIN = 0.05
+
+EPSILON_DECAY = 0.999995
+
+BATCH_SIZE = 64
+
+BUFFER_CAPACITY = 50_000
+
+TARGET_UPDATE = 1_000
+
+HIDDEN_DIM = 256
+
+
+# ============================================================
+# WAREHOUSE CREATION
+# ============================================================
+
+def create_warehouse():
+    """
+    Create the project's fixed 14 x 17 warehouse.
+
+    Layout
+    ------
+    Front cross aisle:
+        row 0
+
+    Rear cross aisle:
+        row 13
+
+    Picking aisle columns:
+        1, 3, 5, 7, 9, 11, 13, 15
+
+    Pick rows:
+        1..12
+
+    Depot:
+        (0, 0)
+
+    Returns
+    -------
+    tuple
+        grid,
+        depot,
+        aisle_columns,
+        all_pick_locations
+    """
+
+    height = 14
+    width = 17
+
+    grid = np.ones(
+        (height, width),
+        dtype=np.int8,
+    )
+
+    # Front cross aisle
+    grid[0, :] = 0
+
+    # Rear cross aisle
+    grid[13, :] = 0
+
+    aisle_columns = [
+        1,
+        3,
+        5,
+        7,
+        9,
+        11,
+        13,
+        15,
+    ]
+
+    # Vertical picking aisles
+    for col in aisle_columns:
+        grid[:, col] = 0
+
+    depot = (0, 0)
+
+    # 8 aisles x 12 locations = 96
+    all_pick_locations = [
+        (row, col)
+        for col in aisle_columns
+        for row in range(1, 13)
+    ]
+
+    return (
+        grid,
+        depot,
+        aisle_columns,
+        all_pick_locations,
+    )
+
+
+# ============================================================
+# REPRODUCIBILITY
+# ============================================================
+
+def set_random_seeds(seed):
+    """
+    Set Python, NumPy and PyTorch random seeds.
+    """
+
+    random.seed(seed)
+
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+
+
+# ============================================================
+# CREATE ENVIRONMENT
+# ============================================================
+
+def create_environment(
+    grid,
+    depot,
+    all_pick_locations,
+):
+    """
+    Create the warehouse RL environment.
+    """
+
+    return WarehouseEnv(
+        grid=grid,
+        depot=depot,
+        all_pick_locations=all_pick_locations,
+        max_steps=MAX_STEPS,
+
+        # Keep reward structure unchanged for this diagnostic.
+        move_cost=-1.0,
+        invalid_penalty=-2.0,
+        pick_reward=2.0,
+        completion_reward=20.0,
+    )
+
+
+# ============================================================
+# CREATE AGENT
+# ============================================================
+
+def create_agent(env):
+    """
+    Create the development DQN agent.
+    """
+
+    return DQNAgent(
+        env=env,
+
+        lr=LEARNING_RATE,
+
+        gamma=GAMMA,
+
+        epsilon=EPSILON_START,
+
+        epsilon_min=EPSILON_MIN,
+
+        epsilon_decay=EPSILON_DECAY,
+
+        batch_size=BATCH_SIZE,
+
+        buffer_capacity=BUFFER_CAPACITY,
+
+        target_update=TARGET_UPDATE,
+
+        hidden_dim=HIDDEN_DIM,
+    )
+
+
+# ============================================================
+# ORDER HELPERS
+# ============================================================
+
+def order_key(order):
+    """
+    Convert an order into a deterministic hashable form.
+    """
+
+    return tuple(
+        sorted(order)
+    )
+
+
+def create_development_orders(
+    all_pick_locations,
+    aisle_columns,
+):
+    """
+    Create the fixed unseen development set.
+
+    Development orders remain unchanged throughout training.
+    """
+
+    orders = []
+
+    seen = set()
+
+    seed = DEV_SEED_START
+
+    while len(orders) < DEV_ORDERS:
+
+        order = generate_order(
+            all_pick_locations=all_pick_locations,
+            size=ORDER_SIZE,
+            distribution="uniform",
+            seed=seed,
+            aisle_columns=aisle_columns,
+        )
+
+        key = order_key(order)
+
+        if key not in seen:
+
+            orders.append(order)
+
+            seen.add(key)
+
+        seed += 1
+
+    return orders
+
+
+def generate_training_order(
+    episode,
+    all_pick_locations,
+    aisle_columns,
+    development_order_keys,
+):
+    """
+    Generate a training order while guaranteeing that it is
+    not one of the fixed development orders.
+    """
+
+    seed = TRAIN_SEED + episode
+
+    while True:
+
+        order = generate_order(
+            all_pick_locations=all_pick_locations,
+            size=ORDER_SIZE,
+            distribution=TRAIN_DISTRIBUTION,
+            seed=seed,
+            aisle_columns=aisle_columns,
+        )
+
+        if order_key(order) not in development_order_keys:
+            return order
+
+        seed += 1
+
+
+# ============================================================
+# COLLECTION DIAGNOSTICS
+# ============================================================
+
+def get_collection_metrics(
+    state,
+    order_size,
+):
+    """
+    Calculate collection progress from the DQN state.
+
+    State layout
+    ------------
+    state[0]:
+        normalised picker row
+
+    state[1]:
+        normalised picker column
+
+    state[2:]:
+        96 binary indicators for required locations
+
+        1 = item is still required
+        0 = item is no longer required
+
+    This avoids relying on internal WarehouseEnv attributes
+    such as env.collected or env.remaining.
+
+    Returns
+    -------
+    tuple
+        items_collected,
+        items_remaining,
+        collection_fraction
+    """
+
+    state = np.asarray(
+        state,
+        dtype=np.float32,
+    )
+
+    remaining_bits = state[2:]
+
+    items_remaining = int(
+        np.count_nonzero(
+            remaining_bits > 0.5
+        )
+    )
+
+    items_collected = (
+        order_size
+        - items_remaining
+    )
+
+    # Defensive bounds
+    items_collected = max(
+        0,
+        min(
+            order_size,
+            items_collected,
+        ),
+    )
+
+    items_remaining = max(
+        0,
+        min(
+            order_size,
+            items_remaining,
+        ),
+    )
+
+    if order_size > 0:
+
+        collection_fraction = (
+            items_collected
+            / order_size
+        )
+
+    else:
+
+        collection_fraction = 1.0
+
+    return (
+        items_collected,
+        items_remaining,
+        float(collection_fraction),
+    )
+
+
+# ============================================================
+# TRAIN ONE EPISODE
+# ============================================================
+
+def train_episode(
+    env,
+    agent,
+    order,
+):
+    """
+    Run one full training episode.
+
+    Returns
+    -------
+    dict
+        Episode metrics.
+    """
+
+    state = env.reset(order)
+
+    terminated = False
+    truncated = False
+
+    total_reward = 0.0
+
+    losses = []
+
+    while not (
+        terminated
+        or truncated
+    ):
+
+        # ----------------------------------------------------
+        # Select epsilon-greedy action
+        # ----------------------------------------------------
+
+        action = agent.select_action(
+            state
+        )
+
+        # ----------------------------------------------------
+        # Environment transition
+        # ----------------------------------------------------
+
+        (
+            next_state,
+            reward,
+            terminated,
+            truncated,
+            info,
+        ) = env.step(
+            action
+        )
+
+        # ----------------------------------------------------
+        # Replay memory
+        # ----------------------------------------------------
+
+        agent.remember(
+            state,
+            action,
+            reward,
+            next_state,
+            terminated,
+            truncated,
+        )
+
+        # ----------------------------------------------------
+        # Gradient update
+        # ----------------------------------------------------
+
+        loss = agent.train_step()
+
+        if loss is not None:
+
+            if not np.isfinite(loss):
+
+                raise RuntimeError(
+                    f"Non-finite DQN loss detected: {loss}"
+                )
+
+            losses.append(
+                float(loss)
+            )
+
+        total_reward += reward
+
+        # Latest environment state
+        state = next_state
+
+    # --------------------------------------------------------
+    # Collection diagnostics
+    # --------------------------------------------------------
+
+    order_size = len(order)
+
+    (
+        items_collected,
+        items_remaining,
+        collection_fraction,
+    ) = get_collection_metrics(
+        state,
+        order_size,
+    )
+
+    average_loss = (
+        float(
+            np.mean(losses)
+        )
+        if losses
+        else np.nan
+    )
+
+    return {
+        "reward": float(
+            total_reward
+        ),
+
+        "distance": float(
+            env.travel_distance
+        ),
+
+        "steps": int(
+            env.steps
+        ),
+
+        "completed": bool(
+            terminated
+        ),
+
+        "truncated": bool(
+            truncated
+        ),
+
+        "epsilon": float(
+            agent.epsilon
+        ),
+
+        "average_loss":
+            average_loss,
+
+        "training_updates":
+            len(losses),
+
+        "order_size":
+            order_size,
+
+        "items_collected":
+            items_collected,
+
+        "items_remaining":
+            items_remaining,
+
+        "collection_fraction":
+            collection_fraction,
+    }
+
+
+# ============================================================
+# GREEDY DQN EVALUATION
+# ============================================================
+
+def evaluate_dqn_order(
+    env,
+    agent,
+    order,
+):
+    """
+    Evaluate the current DQN greedily on one order.
+
+    During evaluation:
+        - epsilon = 0
+        - replay memory is unchanged
+        - no gradient updates occur
+    """
+
+    previous_epsilon = (
+        agent.epsilon
+    )
+
+    agent.epsilon = 0.0
+
+    state = env.reset(order)
+
+    terminated = False
+    truncated = False
+
+    start_time = (
+        time.perf_counter()
+    )
+
+    try:
+
+        while not (
+            terminated
+            or truncated
+        ):
+
+            action = agent.select_action(
+                state
+            )
+
+            (
+                next_state,
+                reward,
+                terminated,
+                truncated,
+                info,
+            ) = env.step(
+                action
+            )
+
+            state = next_state
+
+    finally:
+
+        # Always restore the exploration rate used in training.
+        agent.epsilon = (
+            previous_epsilon
+        )
+
+    runtime = (
+        time.perf_counter()
+        - start_time
+    )
+
+    # --------------------------------------------------------
+    # Collection diagnostics
+    # --------------------------------------------------------
+
+    order_size = len(order)
+
+    (
+        items_collected,
+        items_remaining,
+        collection_fraction,
+    ) = get_collection_metrics(
+        state,
+        order_size,
+    )
+
+    return {
+        "completed": bool(
+            terminated
+        ),
+
+        "truncated": bool(
+            truncated
+        ),
+
+        "distance": float(
+            env.travel_distance
+        ),
+
+        "steps": int(
+            env.steps
+        ),
+
+        "runtime": float(
+            runtime
+        ),
+
+        "order_size":
+            order_size,
+
+        "items_collected":
+            items_collected,
+
+        "items_remaining":
+            items_remaining,
+
+        "collection_fraction":
+            collection_fraction,
+    }
+
+
+# ============================================================
+# DEVELOPMENT OPTIMA
+# ============================================================
+
+def calculate_development_optima(
+    grid,
+    depot,
+    development_orders,
+):
+    """
+    Calculate exact optimal distances for the fixed
+    development set before training begins.
+    """
+
+    optima = []
+
+    print(
+        "\nCalculating development-set optimal distances..."
+    )
+
+    for index, order in enumerate(
+        development_orders,
+        start=1,
+    ):
+
+        optimum = exact_optimal_distance(
+            grid,
+            depot,
+            order,
+        )
+
+        optima.append(
+            float(optimum)
+        )
+
+        print(
+            f"  Dev order "
+            f"{index:02d}/{len(development_orders)}"
+            f" -> {order}"
+            f" -> optimum {optimum:.0f}"
+        )
+
+    return optima
+
+
+# ============================================================
+# DEVELOPMENT EVALUATION
+# ============================================================
+
+def evaluate_development_set(
+    env,
+    agent,
+    development_orders,
+    development_optima,
+    episode,
+):
+    """
+    Evaluate the greedy DQN on every development order.
+    """
+
+    results = []
+
+    for (
+        order_index,
+        (order, optimum),
+    ) in enumerate(
+        zip(
+            development_orders,
+            development_optima,
+        ),
+        start=1,
+    ):
+
+        evaluation = evaluate_dqn_order(
+            env,
+            agent,
+            order,
+        )
+
+        completed = evaluation[
+            "completed"
+        ]
+
+        # Optimality gap only makes sense if the agent
+        # actually completed the order and returned to depot.
+        if completed:
+
+            optimality_gap = (
+                (
+                    evaluation["distance"]
+                    - optimum
+                )
+                / optimum
+                * 100.0
+            )
+
+        else:
+
+            optimality_gap = np.nan
+
+        results.append(
+            {
+                "episode":
+                    episode,
+
+                "order_index":
+                    order_index,
+
+                "order":
+                    str(
+                        sorted(order)
+                    ),
+
+                "completed":
+                    completed,
+
+                "truncated":
+                    evaluation[
+                        "truncated"
+                    ],
+
+                "distance":
+                    evaluation[
+                        "distance"
+                    ],
+
+                "optimal_distance":
+                    optimum,
+
+                "optimality_gap":
+                    optimality_gap,
+
+                "steps":
+                    evaluation[
+                        "steps"
+                    ],
+
+                "runtime":
+                    evaluation[
+                        "runtime"
+                    ],
+
+                "order_size":
+                    evaluation[
+                        "order_size"
+                    ],
+
+                "items_collected":
+                    evaluation[
+                        "items_collected"
+                    ],
+
+                "items_remaining":
+                    evaluation[
+                        "items_remaining"
+                    ],
+
+                "collection_fraction":
+                    evaluation[
+                        "collection_fraction"
+                    ],
+            }
+        )
+
+    # --------------------------------------------------------
+    # Completion metrics
+    # --------------------------------------------------------
+
+    completed_results = [
+        result
+        for result in results
+        if result["completed"]
+    ]
+
+    completion_rate = (
+        100.0
+        * len(completed_results)
+        / len(results)
+    )
+
+    # --------------------------------------------------------
+    # Collection metrics
+    # --------------------------------------------------------
+
+    orders_collecting_any_pick = sum(
+        result["items_collected"] > 0
+        for result in results
+    )
+
+    any_pick_rate = (
+        100.0
+        * orders_collecting_any_pick
+        / len(results)
+    )
+
+    mean_items_collected = float(
+        np.mean(
+            [
+                result["items_collected"]
+                for result in results
+            ]
+        )
+    )
+
+    mean_collection_fraction = float(
+        np.mean(
+            [
+                result[
+                    "collection_fraction"
+                ]
+                for result in results
+            ]
+        )
+    )
+
+    # --------------------------------------------------------
+    # Metrics only for successfully completed orders
+    # --------------------------------------------------------
+
+    if completed_results:
+
+        mean_distance = float(
+            np.mean(
+                [
+                    result["distance"]
+                    for result
+                    in completed_results
+                ]
+            )
+        )
+
+        mean_gap = float(
+            np.mean(
+                [
+                    result[
+                        "optimality_gap"
+                    ]
+                    for result
+                    in completed_results
+                ]
+            )
+        )
+
+        mean_steps = float(
+            np.mean(
+                [
+                    result["steps"]
+                    for result
+                    in completed_results
+                ]
+            )
+        )
+
+    else:
+
+        mean_distance = np.nan
+        mean_gap = np.nan
+        mean_steps = np.nan
+
+    summary = {
+        "episode":
+            episode,
+
+        "completion_rate":
+            completion_rate,
+
+        "completed_orders":
+            len(completed_results),
+
+        "total_orders":
+            len(results),
+
+        "orders_collecting_any_pick":
+            orders_collecting_any_pick,
+
+        "any_pick_rate":
+            any_pick_rate,
+
+        "mean_items_collected":
+            mean_items_collected,
+
+        "mean_collection_fraction":
+            mean_collection_fraction,
+
+        "mean_completed_distance":
+            mean_distance,
+
+        "mean_optimality_gap":
+            mean_gap,
+
+        "mean_completed_steps":
+            mean_steps,
+    }
+
+    return (
+        summary,
+        results,
+    )
+
+
+# ============================================================
+# CSV SAVING
+# ============================================================
+
+def save_csv(
+    rows,
+    output_path,
+):
+    """
+    Save a list of dictionaries as CSV.
+    """
+
+    if not rows:
+        return
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with output_path.open(
+        "w",
+        newline="",
+    ) as file:
+
+        writer = csv.DictWriter(
+            file,
+            fieldnames=rows[0].keys(),
+        )
+
+        writer.writeheader()
+
+        writer.writerows(
+            rows
+        )
+
+
+# ============================================================
+# BEST MODEL SELECTION
+# ============================================================
+
+def development_score_is_better(
+    new_summary,
+    best_summary,
+):
+    """
+    Decide whether the new model is better.
+
+    Priority
+    --------
+    1. Higher completion rate
+    2. Higher collection fraction
+    3. Lower optimality gap
+    """
+
+    if best_summary is None:
+        return True
+
+    # --------------------------------------------------------
+    # 1. Completion
+    # --------------------------------------------------------
+
+    new_completion = new_summary[
+        "completion_rate"
+    ]
+
+    best_completion = best_summary[
+        "completion_rate"
+    ]
+
+    if new_completion > best_completion:
+        return True
+
+    if new_completion < best_completion:
+        return False
+
+    # --------------------------------------------------------
+    # 2. Collection fraction
+    # --------------------------------------------------------
+
+    new_collection = new_summary[
+        "mean_collection_fraction"
+    ]
+
+    best_collection = best_summary[
+        "mean_collection_fraction"
+    ]
+
+    if new_collection > best_collection:
+        return True
+
+    if new_collection < best_collection:
+        return False
+
+    # --------------------------------------------------------
+    # 3. Optimality gap
+    # --------------------------------------------------------
+
+    new_gap = new_summary[
+        "mean_optimality_gap"
+    ]
+
+    best_gap = best_summary[
+        "mean_optimality_gap"
+    ]
+
+    if (
+        np.isnan(new_gap)
+        and np.isnan(best_gap)
+    ):
+        return False
+
+    if np.isnan(new_gap):
+        return False
+
+    if np.isnan(best_gap):
+        return True
+
+    return (
+        new_gap
+        < best_gap
+    )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    print(
+        "\n"
+        "============================================\n"
+        "DQN ONE-PICK DIAGNOSTIC TRAINING\n"
+        "============================================"
+    )
+
+    print(
+        f"Run name:              {RUN_NAME}\n"
+        f"Training episodes:     {TRAIN_EPISODES}\n"
+        f"Training order size:   {ORDER_SIZE}\n"
+        f"Training distribution: {TRAIN_DISTRIBUTION}\n"
+        f"Development orders:    {DEV_ORDERS}\n"
+        f"Evaluate every:        {EVALUATE_EVERY} episodes\n"
+        f"Max episode steps:     {MAX_STEPS}\n"
+        f"Training seed:         {TRAIN_SEED}\n"
+        f"Epsilon decay:         {EPSILON_DECAY}\n"
+    )
+
+    # ========================================================
+    # REPRODUCIBILITY
+    # ========================================================
+
+    set_random_seeds(
+        TRAIN_SEED
+    )
+
+    # ========================================================
+    # WAREHOUSE
+    # ========================================================
+
+    (
+        grid,
+        depot,
+        aisle_columns,
+        all_pick_locations,
+    ) = create_warehouse()
+
+    print(
+        f"State dimension: "
+        f"{2 + len(all_pick_locations)}"
+    )
+
+    print(
+        f"Fixed pick locations: "
+        f"{len(all_pick_locations)}"
+    )
+
+    # ========================================================
+    # ENVIRONMENT + AGENT
+    # ========================================================
+
+    env = create_environment(
+        grid,
+        depot,
+        all_pick_locations,
+    )
+
+    agent = create_agent(
+        env
+    )
+
+    # ========================================================
+    # DEVELOPMENT ORDERS
+    # ========================================================
+
+    development_orders = (
+        create_development_orders(
+            all_pick_locations,
+            aisle_columns,
+        )
+    )
+
+    development_order_keys = {
+        order_key(order)
+        for order
+        in development_orders
+    }
+
+    development_optima = (
+        calculate_development_optima(
+            grid,
+            depot,
+            development_orders,
+        )
+    )
+
+    # ========================================================
+    # OUTPUT PATHS
+    # ========================================================
+
+    results_directory = (
+        PROJECT_ROOT
+        / "results"
+        / "development"
+        / RUN_NAME
+    )
+
+    results_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    training_history_path = (
+        results_directory
+        / "dqn_training_history.csv"
+    )
+
+    development_summary_path = (
+        results_directory
+        / "dqn_dev_summary.csv"
+    )
+
+    development_raw_path = (
+        results_directory
+        / "dqn_dev_raw.csv"
+    )
+
+    best_model_path = (
+        results_directory
+        / "dqn_best_dev_model.pt"
+    )
+
+    final_model_path = (
+        results_directory
+        / "dqn_final_dev_model.pt"
+    )
+
+    # ========================================================
+    # HISTORY
+    # ========================================================
+
+    training_history = []
+
+    development_summaries = []
+
+    development_raw_results = []
+
+    rolling_completion = deque(
+        maxlen=50
+    )
+
+    rolling_collection_fraction = deque(
+        maxlen=50
+    )
+
+    rolling_items_collected = deque(
+        maxlen=50
+    )
+
+    rolling_rewards = deque(
+        maxlen=50
+    )
+
+    best_development_summary = None
+
+    # ========================================================
+    # INITIAL EVALUATION
+    # ========================================================
+
+    print(
+        "\nEvaluating untrained policy..."
+    )
+
+    (
+        initial_summary,
+        initial_raw,
+    ) = evaluate_development_set(
+        env,
+        agent,
+        development_orders,
+        development_optima,
+        episode=0,
+    )
+
+    development_summaries.append(
+        initial_summary
+    )
+
+    development_raw_results.extend(
+        initial_raw
+    )
+
+    best_development_summary = (
+        initial_summary.copy()
+    )
+
+    # Save initial policy as baseline best model.
+    agent.save(
+        best_model_path
+    )
+
+    print(
+        f"Episode 0"
+        f" | dev completion "
+        f"{initial_summary['completion_rate']:.1f}%"
+        f" | any-pick rate "
+        f"{initial_summary['any_pick_rate']:.1f}%"
+        f" | mean collection "
+        f"{initial_summary['mean_collection_fraction']:.3f}"
+    )
+
+    # ========================================================
+    # TRAINING LOOP
+    # ========================================================
+
+    training_start_time = (
+        time.perf_counter()
+    )
+
+    for episode in range(
+        1,
+        TRAIN_EPISODES + 1,
+    ):
+
+        # ----------------------------------------------------
+        # Generate training order
+        # ----------------------------------------------------
+
+        order = generate_training_order(
+            episode,
+            all_pick_locations,
+            aisle_columns,
+            development_order_keys,
+        )
+
+        # ----------------------------------------------------
+        # Train one episode
+        # ----------------------------------------------------
+
+        metrics = train_episode(
+            env,
+            agent,
+            order,
+        )
+
+        # ----------------------------------------------------
+        # Rolling statistics
+        # ----------------------------------------------------
+
+        rolling_completion.append(
+            int(
+                metrics["completed"]
+            )
+        )
+
+        rolling_collection_fraction.append(
+            metrics[
+                "collection_fraction"
+            ]
+        )
+
+        rolling_items_collected.append(
+            metrics[
+                "items_collected"
+            ]
+        )
+
+        rolling_rewards.append(
+            metrics[
+                "reward"
+            ]
+        )
+
+        rolling_completion_rate = (
+            100.0
+            * float(
+                np.mean(
+                    rolling_completion
+                )
+            )
+        )
+
+        rolling_mean_collection = float(
+            np.mean(
+                rolling_collection_fraction
+            )
+        )
+
+        rolling_mean_items = float(
+            np.mean(
+                rolling_items_collected
+            )
+        )
+
+        rolling_reward = float(
+            np.mean(
+                rolling_rewards
+            )
+        )
+
+        # ----------------------------------------------------
+        # Training history row
+        # ----------------------------------------------------
+
+        training_row = {
+            "episode":
+                episode,
+
+            "order":
+                str(
+                    sorted(order)
+                ),
+
+            "reward":
+                metrics[
+                    "reward"
+                ],
+
+            "distance":
+                metrics[
+                    "distance"
+                ],
+
+            "steps":
+                metrics[
+                    "steps"
+                ],
+
+            "completed":
+                metrics[
+                    "completed"
+                ],
+
+            "truncated":
+                metrics[
+                    "truncated"
+                ],
+
+            "order_size":
+                metrics[
+                    "order_size"
+                ],
+
+            "items_collected":
+                metrics[
+                    "items_collected"
+                ],
+
+            "items_remaining":
+                metrics[
+                    "items_remaining"
+                ],
+
+            "collection_fraction":
+                metrics[
+                    "collection_fraction"
+                ],
+
+            "epsilon":
+                metrics[
+                    "epsilon"
+                ],
+
+            "average_loss":
+                metrics[
+                    "average_loss"
+                ],
+
+            "training_updates":
+                metrics[
+                    "training_updates"
+                ],
+
+            "rolling_50_completion_rate":
+                rolling_completion_rate,
+
+            "rolling_50_mean_items_collected":
+                rolling_mean_items,
+
+            "rolling_50_collection_fraction":
+                rolling_mean_collection,
+
+            "rolling_50_reward":
+                rolling_reward,
+        }
+
+        training_history.append(
+            training_row
+        )
+
+        # ----------------------------------------------------
+        # Console output
+        # ----------------------------------------------------
+
+        if (
+            episode == 1
+            or episode % 10 == 0
+        ):
+
+            loss_text = (
+                f"{metrics['average_loss']:.4f}"
+                if np.isfinite(
+                    metrics[
+                        "average_loss"
+                    ]
+                )
+                else "N/A"
+            )
+
+            print(
+                f"Episode "
+                f"{episode:03d}/{TRAIN_EPISODES}"
+                f" | reward "
+                f"{metrics['reward']:8.1f}"
+                f" | steps "
+                f"{metrics['steps']:3d}"
+                f" | collected "
+                f"{metrics['items_collected']}"
+                f"/{metrics['order_size']}"
+                f" | complete "
+                f"{int(metrics['completed'])}"
+                f" | roll collect "
+                f"{rolling_mean_collection:5.2f}"
+                f" | roll complete "
+                f"{rolling_completion_rate:5.1f}%"
+                f" | eps "
+                f"{metrics['epsilon']:.3f}"
+                f" | loss "
+                f"{loss_text}"
+            )
+
+        # ====================================================
+        # PERIODIC DEVELOPMENT EVALUATION
+        # ====================================================
+
+        if (
+            episode
+            % EVALUATE_EVERY
+            == 0
+        ):
+
+            (
+                dev_summary,
+                dev_raw,
+            ) = evaluate_development_set(
+                env,
+                agent,
+                development_orders,
+                development_optima,
+                episode,
+            )
+
+            development_summaries.append(
+                dev_summary
+            )
+
+            development_raw_results.extend(
+                dev_raw
+            )
+
+            gap_value = dev_summary[
+                "mean_optimality_gap"
+            ]
+
+            gap_text = (
+                f"{gap_value:.2f}%"
+                if np.isfinite(
+                    gap_value
+                )
+                else "N/A"
+            )
+
+            print(
+                "\n"
+                "--------------------------------------------"
+            )
+
+            print(
+                f"DEVELOPMENT EVALUATION "
+                f"AT EPISODE {episode}"
+            )
+
+            print(
+                "--------------------------------------------"
+            )
+
+            print(
+                f"Completion rate:       "
+                f"{dev_summary['completion_rate']:.1f}%"
+            )
+
+            print(
+                f"Completed orders:      "
+                f"{dev_summary['completed_orders']}"
+                f"/{dev_summary['total_orders']}"
+            )
+
+            print(
+                f"Any-pick rate:         "
+                f"{dev_summary['any_pick_rate']:.1f}%"
+            )
+
+            print(
+                f"Mean items collected:  "
+                f"{dev_summary['mean_items_collected']:.3f}"
+            )
+
+            print(
+                f"Mean collection frac:  "
+                f"{dev_summary['mean_collection_fraction']:.3f}"
+            )
+
+            print(
+                f"Mean completed dist:   "
+                f"{dev_summary['mean_completed_distance']}"
+            )
+
+            print(
+                f"Mean optimality gap:   "
+                f"{gap_text}"
+            )
+
+            # ------------------------------------------------
+            # Save best development model
+            # ------------------------------------------------
+
+            if development_score_is_better(
+                dev_summary,
+                best_development_summary,
+            ):
+
+                best_development_summary = (
+                    dev_summary.copy()
+                )
+
+                agent.save(
+                    best_model_path
+                )
+
+                print(
+                    "New best development model saved."
+                )
+
+            print()
+
+            # ------------------------------------------------
+            # Save intermediate results
+            # ------------------------------------------------
+
+            save_csv(
+                training_history,
+                training_history_path,
+            )
+
+            save_csv(
+                development_summaries,
+                development_summary_path,
+            )
+
+            save_csv(
+                development_raw_results,
+                development_raw_path,
+            )
+
+    # ========================================================
+    # TRAINING COMPLETE
+    # ========================================================
+
+    total_training_time = (
+        time.perf_counter()
+        - training_start_time
+    )
+
+    # ========================================================
+    # SAVE FINAL MODEL
+    # ========================================================
+
+    agent.save(
+        final_model_path
+    )
+
+    # ========================================================
+    # FINAL CSV SAVE
+    # ========================================================
+
+    save_csv(
+        training_history,
+        training_history_path,
+    )
+
+    save_csv(
+        development_summaries,
+        development_summary_path,
+    )
+
+    save_csv(
+        development_raw_results,
+        development_raw_path,
+    )
+
+    # ========================================================
+    # FINAL SUMMARY
+    # ========================================================
+
+    print(
+        "\n"
+        "============================================\n"
+        "ONE-PICK DIAGNOSTIC COMPLETE\n"
+        "============================================"
+    )
+
+    print(
+        f"Training time: "
+        f"{total_training_time:.2f} seconds"
+    )
+
+    print(
+        f"Final epsilon: "
+        f"{agent.epsilon:.4f}"
+    )
+
+    print(
+        f"Final rolling completion: "
+        f"{100.0 * np.mean(rolling_completion):.1f}%"
+    )
+
+    print(
+        f"Final rolling collection fraction: "
+        f"{np.mean(rolling_collection_fraction):.3f}"
+    )
+
+    print(
+        f"Final rolling items collected: "
+        f"{np.mean(rolling_items_collected):.3f}"
+    )
+
+    # ========================================================
+    # BEST DEVELOPMENT RESULT
+    # ========================================================
+
+    if best_development_summary is not None:
+
+        print(
+            f"Best dev episode: "
+            f"{best_development_summary['episode']}"
+        )
+
+        print(
+            f"Best dev completion: "
+            f"{best_development_summary['completion_rate']:.1f}%"
+        )
+
+        print(
+            f"Best dev any-pick rate: "
+            f"{best_development_summary['any_pick_rate']:.1f}%"
+        )
+
+        print(
+            f"Best dev mean collection fraction: "
+            f"{best_development_summary['mean_collection_fraction']:.3f}"
+        )
+
+        gap = best_development_summary[
+            "mean_optimality_gap"
+        ]
+
+        if np.isfinite(gap):
+
+            print(
+                f"Best dev mean optimality gap: "
+                f"{gap:.2f}%"
+            )
+
+    # ========================================================
+    # OUTPUT LOCATIONS
+    # ========================================================
+
+    print(
+        "\nSaved outputs:"
+    )
+
+    print(
+        f"  Training history:\n"
+        f"    {training_history_path}"
+    )
+
+    print(
+        f"  Development summary:\n"
+        f"    {development_summary_path}"
+    )
+
+    print(
+        f"  Development raw results:\n"
+        f"    {development_raw_path}"
+    )
+
+    print(
+        f"  Best development model:\n"
+        f"    {best_model_path}"
+    )
+
+    print(
+        f"  Final development model:\n"
+        f"    {final_model_path}"
+    )
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    main()
