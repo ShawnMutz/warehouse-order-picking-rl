@@ -1,5 +1,5 @@
 """
-DQN one-pick diagnostic training.
+DQN one-pick learnability training.
 
 Purpose
 -------
@@ -9,9 +9,10 @@ warehouse-routing task before progressing to larger orders.
 Training:
     - 1-pick orders
     - uniform distribution
+    - all 96 pick locations may appear during training
 
 Development evaluation:
-    - fixed unseen 1-pick uniform orders
+    - fixed 1-pick uniform orders
     - greedy policy (epsilon = 0)
     - no replay-buffer insertion
     - no gradient updates
@@ -55,22 +56,27 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+# Project imports MUST come after PROJECT_ROOT is added.
+
+
 # ============================================================
 # DEVELOPMENT SETTINGS
 # ============================================================
 
-RUN_NAME = "one_pick_diagnostic"
+RUN_NAME = "one_pick_learnability"
 
 TRAIN_SEED = 42
 
 TRAIN_EPISODES = 500
 
-# Start with the simplest possible routing problem.
+# Simplest possible routing problem.
 ORDER_SIZE = 1
 
 TRAIN_DISTRIBUTION = "uniform"
 
-MAX_STEPS = 500
+# Reduced from 500 because one-pick optimal routes are
+# substantially shorter.
+MAX_STEPS = 150
 
 
 # ============================================================
@@ -87,11 +93,6 @@ EVALUATE_EVERY = 50
 # ============================================================
 # DQN HYPERPARAMETERS
 # ============================================================
-#
-# Development values only.
-#
-# Epsilon currently decays after every gradient update,
-# therefore decay is deliberately slow.
 
 LEARNING_RATE = 1e-4
 
@@ -101,6 +102,8 @@ EPSILON_START = 1.0
 
 EPSILON_MIN = 0.05
 
+# Epsilon decays after each training update, so this is
+# deliberately slow for the learnability experiment.
 EPSILON_DECAY = 0.999995
 
 BATCH_SIZE = 64
@@ -113,29 +116,25 @@ HIDDEN_DIM = 256
 
 
 # ============================================================
-# WAREHOUSE CREATION
+# WAREHOUSE
 # ============================================================
 
 def create_warehouse():
     """
-    Create the project's fixed 14 x 17 warehouse.
+    Create the fixed 14 x 17 project warehouse.
 
-    Layout
-    ------
-    Front cross aisle:
-        row 0
+    Layout:
+        front cross aisle = row 0
+        rear cross aisle = row 13
 
-    Rear cross aisle:
-        row 13
+        picking aisle columns:
+            1, 3, 5, 7, 9, 11, 13, 15
 
-    Picking aisle columns:
-        1, 3, 5, 7, 9, 11, 13, 15
+        storage rows:
+            1..12
 
-    Pick rows:
-        1..12
-
-    Depot:
-        (0, 0)
+        depot:
+            (0, 0)
 
     Returns
     -------
@@ -177,7 +176,7 @@ def create_warehouse():
 
     depot = (0, 0)
 
-    # 8 aisles x 12 locations = 96
+    # 8 aisles x 12 positions = 96 fixed pick locations.
     all_pick_locations = [
         (row, col)
         for col in aisle_columns
@@ -202,14 +201,12 @@ def set_random_seeds(seed):
     """
 
     random.seed(seed)
-
     np.random.seed(seed)
-
     torch.manual_seed(seed)
 
 
 # ============================================================
-# CREATE ENVIRONMENT
+# ENVIRONMENT
 # ============================================================
 
 def create_environment(
@@ -227,7 +224,7 @@ def create_environment(
         all_pick_locations=all_pick_locations,
         max_steps=MAX_STEPS,
 
-        # Keep reward structure unchanged for this diagnostic.
+        # Keep reward design unchanged for this diagnostic.
         move_cost=-1.0,
         invalid_penalty=-2.0,
         pick_reward=2.0,
@@ -236,29 +233,25 @@ def create_environment(
 
 
 # ============================================================
-# CREATE AGENT
+# DQN AGENT
 # ============================================================
 
 def create_agent(env):
     """
-    Create the development DQN agent.
+    Create the development DQN.
     """
 
     return DQNAgent(
         env=env,
 
         lr=LEARNING_RATE,
-
         gamma=GAMMA,
 
         epsilon=EPSILON_START,
-
         epsilon_min=EPSILON_MIN,
-
         epsilon_decay=EPSILON_DECAY,
 
         batch_size=BATCH_SIZE,
-
         buffer_capacity=BUFFER_CAPACITY,
 
         target_update=TARGET_UPDATE,
@@ -286,9 +279,15 @@ def create_development_orders(
     aisle_columns,
 ):
     """
-    Create the fixed unseen development set.
+    Create a fixed development evaluation set.
 
-    Development orders remain unchanged throughout training.
+    Important
+    ---------
+    The exact same one-location orders MAY also occur during
+    training in this learnability diagnostic.
+
+    The development set is still useful because evaluation
+    itself is greedy and produces no replay-buffer updates.
     """
 
     orders = []
@@ -324,29 +323,25 @@ def generate_training_order(
     episode,
     all_pick_locations,
     aisle_columns,
-    development_order_keys,
 ):
     """
-    Generate a training order while guaranteeing that it is
-    not one of the fixed development orders.
+    Generate one deterministic training order.
+
+    For this one-pick learnability experiment, all 96
+    locations are eligible during training.
+
+    No development-location exclusion is performed.
     """
 
     seed = TRAIN_SEED + episode
 
-    while True:
-
-        order = generate_order(
-            all_pick_locations=all_pick_locations,
-            size=ORDER_SIZE,
-            distribution=TRAIN_DISTRIBUTION,
-            seed=seed,
-            aisle_columns=aisle_columns,
-        )
-
-        if order_key(order) not in development_order_keys:
-            return order
-
-        seed += 1
+    return generate_order(
+        all_pick_locations=all_pick_locations,
+        size=ORDER_SIZE,
+        distribution=TRAIN_DISTRIBUTION,
+        seed=seed,
+        aisle_columns=aisle_columns,
+    )
 
 
 # ============================================================
@@ -358,24 +353,15 @@ def get_collection_metrics(
     order_size,
 ):
     """
-    Calculate collection progress from the DQN state.
+    Calculate collection progress from the environment state.
 
-    State layout
-    ------------
-    state[0]:
-        normalised picker row
+    State layout:
+        state[0]  = normalised picker row
+        state[1]  = normalised picker column
+        state[2:] = 96 remaining-pick indicators
 
-    state[1]:
-        normalised picker column
-
-    state[2:]:
-        96 binary indicators for required locations
-
-        1 = item is still required
-        0 = item is no longer required
-
-    This avoids relying on internal WarehouseEnv attributes
-    such as env.collected or env.remaining.
+    A remaining-pick value greater than 0.5 is treated as
+    an item that still needs to be collected.
 
     Returns
     -------
@@ -403,7 +389,7 @@ def get_collection_metrics(
         - items_remaining
     )
 
-    # Defensive bounds
+    # Defensive bounds.
     items_collected = max(
         0,
         min(
@@ -448,12 +434,12 @@ def train_episode(
     order,
 ):
     """
-    Run one full training episode.
+    Run one complete DQN training episode.
 
     Returns
     -------
     dict
-        Episode metrics.
+        Episode-level metrics.
     """
 
     state = env.reset(order)
@@ -471,7 +457,7 @@ def train_episode(
     ):
 
         # ----------------------------------------------------
-        # Select epsilon-greedy action
+        # Action selection
         # ----------------------------------------------------
 
         action = agent.select_action(
@@ -493,7 +479,7 @@ def train_episode(
         )
 
         # ----------------------------------------------------
-        # Replay memory
+        # Replay buffer
         # ----------------------------------------------------
 
         agent.remember(
@@ -525,7 +511,6 @@ def train_episode(
 
         total_reward += reward
 
-        # Latest environment state
         state = next_state
 
     # --------------------------------------------------------
@@ -552,29 +537,23 @@ def train_episode(
     )
 
     return {
-        "reward": float(
-            total_reward
-        ),
+        "reward":
+            float(total_reward),
 
-        "distance": float(
-            env.travel_distance
-        ),
+        "distance":
+            float(env.travel_distance),
 
-        "steps": int(
-            env.steps
-        ),
+        "steps":
+            int(env.steps),
 
-        "completed": bool(
-            terminated
-        ),
+        "completed":
+            bool(terminated),
 
-        "truncated": bool(
-            truncated
-        ),
+        "truncated":
+            bool(truncated),
 
-        "epsilon": float(
-            agent.epsilon
-        ),
+        "epsilon":
+            float(agent.epsilon),
 
         "average_loss":
             average_loss,
@@ -597,7 +576,7 @@ def train_episode(
 
 
 # ============================================================
-# GREEDY DQN EVALUATION
+# GREEDY EVALUATION
 # ============================================================
 
 def evaluate_dqn_order(
@@ -606,12 +585,12 @@ def evaluate_dqn_order(
     order,
 ):
     """
-    Evaluate the current DQN greedily on one order.
+    Evaluate the DQN greedily on one order.
 
     During evaluation:
-        - epsilon = 0
-        - replay memory is unchanged
-        - no gradient updates occur
+        epsilon = 0
+        no replay-buffer insertion
+        no gradient update
     """
 
     previous_epsilon = (
@@ -654,7 +633,7 @@ def evaluate_dqn_order(
 
     finally:
 
-        # Always restore the exploration rate used in training.
+        # Restore training exploration rate.
         agent.epsilon = (
             previous_epsilon
         )
@@ -680,25 +659,20 @@ def evaluate_dqn_order(
     )
 
     return {
-        "completed": bool(
-            terminated
-        ),
+        "completed":
+            bool(terminated),
 
-        "truncated": bool(
-            truncated
-        ),
+        "truncated":
+            bool(truncated),
 
-        "distance": float(
-            env.travel_distance
-        ),
+        "distance":
+            float(env.travel_distance),
 
-        "steps": int(
-            env.steps
-        ),
+        "steps":
+            int(env.steps),
 
-        "runtime": float(
-            runtime
-        ),
+        "runtime":
+            float(runtime),
 
         "order_size":
             order_size,
@@ -724,8 +698,8 @@ def calculate_development_optima(
     development_orders,
 ):
     """
-    Calculate exact optimal distances for the fixed
-    development set before training begins.
+    Calculate exact optimal distances for every fixed
+    development order.
     """
 
     optima = []
@@ -760,7 +734,7 @@ def calculate_development_optima(
 
 
 # ============================================================
-# DEVELOPMENT EVALUATION
+# DEVELOPMENT SET EVALUATION
 # ============================================================
 
 def evaluate_development_set(
@@ -771,7 +745,7 @@ def evaluate_development_set(
     episode,
 ):
     """
-    Evaluate the greedy DQN on every development order.
+    Evaluate the greedy DQN on all fixed development orders.
     """
 
     results = []
@@ -797,8 +771,8 @@ def evaluate_development_set(
             "completed"
         ]
 
-        # Optimality gap only makes sense if the agent
-        # actually completed the order and returned to depot.
+        # Optimality gap only makes sense for successful
+        # complete routes.
         if completed:
 
             optimality_gap = (
@@ -921,16 +895,14 @@ def evaluate_development_set(
     mean_collection_fraction = float(
         np.mean(
             [
-                result[
-                    "collection_fraction"
-                ]
+                result["collection_fraction"]
                 for result in results
             ]
         )
     )
 
     # --------------------------------------------------------
-    # Metrics only for successfully completed orders
+    # Completed-order metrics
     # --------------------------------------------------------
 
     if completed_results:
@@ -948,9 +920,7 @@ def evaluate_development_set(
         mean_gap = float(
             np.mean(
                 [
-                    result[
-                        "optimality_gap"
-                    ]
+                    result["optimality_gap"]
                     for result
                     in completed_results
                 ]
@@ -1023,7 +993,7 @@ def save_csv(
     output_path,
 ):
     """
-    Save a list of dictionaries as CSV.
+    Save list-of-dictionary results to CSV.
     """
 
     if not rows:
@@ -1060,20 +1030,19 @@ def development_score_is_better(
     best_summary,
 ):
     """
-    Decide whether the new model is better.
+    Compare development checkpoints.
 
-    Priority
-    --------
-    1. Higher completion rate
-    2. Higher collection fraction
-    3. Lower optimality gap
+    Priority:
+        1. higher completion rate
+        2. higher collection fraction
+        3. lower optimality gap
     """
 
     if best_summary is None:
         return True
 
     # --------------------------------------------------------
-    # 1. Completion
+    # Completion
     # --------------------------------------------------------
 
     new_completion = new_summary[
@@ -1091,7 +1060,7 @@ def development_score_is_better(
         return False
 
     # --------------------------------------------------------
-    # 2. Collection fraction
+    # Collection fraction
     # --------------------------------------------------------
 
     new_collection = new_summary[
@@ -1109,7 +1078,7 @@ def development_score_is_better(
         return False
 
     # --------------------------------------------------------
-    # 3. Optimality gap
+    # Optimality gap
     # --------------------------------------------------------
 
     new_gap = new_summary[
@@ -1147,7 +1116,7 @@ def main():
     print(
         "\n"
         "============================================\n"
-        "DQN ONE-PICK DIAGNOSTIC TRAINING\n"
+        "DQN ONE-PICK LEARNABILITY TRAINING\n"
         "============================================"
     )
 
@@ -1207,7 +1176,7 @@ def main():
     )
 
     # ========================================================
-    # DEVELOPMENT ORDERS
+    # DEVELOPMENT SET
     # ========================================================
 
     development_orders = (
@@ -1217,11 +1186,11 @@ def main():
         )
     )
 
-    development_order_keys = {
-        order_key(order)
-        for order
-        in development_orders
-    }
+    # IMPORTANT:
+    # There is deliberately NO development_order_keys block.
+    #
+    # Development locations are allowed to appear in training
+    # for this one-pick learnability diagnostic.
 
     development_optima = (
         calculate_development_optima(
@@ -1273,7 +1242,7 @@ def main():
     )
 
     # ========================================================
-    # HISTORY
+    # HISTORY CONTAINERS
     # ========================================================
 
     training_history = []
@@ -1301,7 +1270,7 @@ def main():
     best_development_summary = None
 
     # ========================================================
-    # INITIAL EVALUATION
+    # INITIAL UNTRAINED EVALUATION
     # ========================================================
 
     print(
@@ -1331,7 +1300,7 @@ def main():
         initial_summary.copy()
     )
 
-    # Save initial policy as baseline best model.
+    # Always keep an initial checkpoint.
     agent.save(
         best_model_path
     )
@@ -1367,7 +1336,6 @@ def main():
             episode,
             all_pick_locations,
             aisle_columns,
-            development_order_keys,
         )
 
         # ----------------------------------------------------
@@ -1436,7 +1404,7 @@ def main():
         )
 
         # ----------------------------------------------------
-        # Training history row
+        # Store training history
         # ----------------------------------------------------
 
         training_row = {
@@ -1526,7 +1494,7 @@ def main():
         )
 
         # ----------------------------------------------------
-        # Console output
+        # Console progress
         # ----------------------------------------------------
 
         if (
@@ -1658,7 +1626,7 @@ def main():
             )
 
             # ------------------------------------------------
-            # Save best development model
+            # Best model
             # ------------------------------------------------
 
             if development_score_is_better(
@@ -1681,7 +1649,7 @@ def main():
             print()
 
             # ------------------------------------------------
-            # Save intermediate results
+            # Intermediate result save
             # ------------------------------------------------
 
             save_csv(
@@ -1700,7 +1668,7 @@ def main():
             )
 
     # ========================================================
-    # TRAINING COMPLETE
+    # END TRAINING
     # ========================================================
 
     total_training_time = (
@@ -1742,7 +1710,7 @@ def main():
     print(
         "\n"
         "============================================\n"
-        "ONE-PICK DIAGNOSTIC COMPLETE\n"
+        "ONE-PICK LEARNABILITY RUN COMPLETE\n"
         "============================================"
     )
 
@@ -1772,7 +1740,7 @@ def main():
     )
 
     # ========================================================
-    # BEST DEVELOPMENT RESULT
+    # BEST DEVELOPMENT CHECKPOINT
     # ========================================================
 
     if best_development_summary is not None:
@@ -1809,7 +1777,7 @@ def main():
             )
 
     # ========================================================
-    # OUTPUT LOCATIONS
+    # OUTPUT PATHS
     # ========================================================
 
     print(
