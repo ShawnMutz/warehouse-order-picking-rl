@@ -229,6 +229,7 @@ class DQNAgent:
         buffer_capacity=10000,
         target_update=1000,
         hidden_dim=256,
+        input_dim=None,
     ):
 
         self.env = env
@@ -244,16 +245,40 @@ class DQNAgent:
         )
 
         # ----------------------------------------------------
-        # State and action dimensions
+        # State dimension
         # ----------------------------------------------------
 
-        self.input_dim = (
-            2
-            + len(
-                env.all_pick_locations
-            )
-        )
+        # By default, preserve the original WarehouseEnv state:
+        #
+        #     2 picker coordinates
+        #     +
+        #     96 remaining-pick indicators
+        #
+        #     = 98 dimensions
+        #
+        # Coordinate-state experiments can override this by
+        # explicitly supplying input_dim.
 
+        if input_dim is None:
+
+            self.input_dim = (
+                2
+                + len(
+                    env.all_pick_locations
+                )
+            )
+
+        else:
+
+            self.input_dim = int(
+                input_dim
+            )
+
+            if self.input_dim <= 0:
+
+                raise ValueError(
+                    "input_dim must be greater than zero."
+                )
         self.n_actions = 4
 
         # ----------------------------------------------------

@@ -811,3 +811,87 @@ def test_replay_sample_preserves_terminal_mask():
         0.0,
         1.0,
     ]
+
+
+def test_default_input_dimension_remains_98():
+    """
+    Existing experiments should continue to use the original
+    98-dimensional WarehouseEnv state when input_dim is not
+    supplied explicitly.
+    """
+
+    env = create_test_environment()
+
+    agent = DQNAgent(
+        env=env,
+    )
+
+    assert agent.input_dim == 98
+
+
+def test_agent_accepts_explicit_coordinate_input_dimension():
+    """
+    Coordinate-state experiments should be able to create
+    a DQN with 62 input features.
+    """
+
+    env = create_test_environment()
+
+    agent = DQNAgent(
+        env=env,
+        input_dim=62,
+    )
+
+    assert agent.input_dim == 62
+
+
+def test_coordinate_input_produces_four_q_values():
+    """
+    A 62-dimensional coordinate state should still map to
+    the four movement-action Q-values.
+    """
+
+    env = create_test_environment()
+
+    agent = DQNAgent(
+        env=env,
+        input_dim=62,
+    )
+
+    state = np.zeros(
+        62,
+        dtype=np.float32,
+    )
+
+    state_tensor = torch.tensor(
+        state,
+        dtype=torch.float32,
+    ).unsqueeze(0)
+
+    with torch.no_grad():
+
+        q_values = agent.policy_net(
+            state_tensor
+        )
+
+    assert q_values.shape == (
+        1,
+        4,
+    )
+
+
+def test_agent_rejects_invalid_explicit_input_dimension():
+    """
+    Explicit DQN dimensions must be positive.
+    """
+
+    env = create_test_environment()
+
+    with pytest.raises(
+        ValueError
+    ):
+
+        DQNAgent(
+            env=env,
+            input_dim=0,
+        )
