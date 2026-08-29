@@ -618,3 +618,196 @@ def test_model_save_and_load(tmp_path):
             original_parameter,
             loaded_parameter,
         )
+# ============================================================
+# TERMINATION VS TRUNCATION TESTS
+# ============================================================
+
+
+def test_successful_termination_is_stored_as_terminal():
+    """
+    A genuine successful termination must stop Bellman
+    bootstrapping.
+    """
+
+    env = create_test_environment()
+
+    agent = DQNAgent(
+        env=env,
+        batch_size=1,
+    )
+
+    state = np.zeros(
+        agent.input_dim,
+        dtype=np.float32,
+    )
+
+    next_state = np.ones(
+        agent.input_dim,
+        dtype=np.float32,
+    )
+
+    agent.remember(
+        state=state,
+        action=0,
+        reward=1.0,
+        next_state=next_state,
+        terminated=True,
+        truncated=False,
+    )
+
+    transition = agent.memory.buffer[-1]
+
+    stored_terminal = transition[4]
+
+    assert stored_terminal is True
+
+
+def test_truncation_is_not_stored_as_terminal():
+    """
+    Reaching max_steps ends the rollout but should NOT stop
+    Bellman bootstrapping.
+    """
+
+    env = create_test_environment()
+
+    agent = DQNAgent(
+        env=env,
+        batch_size=1,
+    )
+
+    state = np.zeros(
+        agent.input_dim,
+        dtype=np.float32,
+    )
+
+    next_state = np.ones(
+        agent.input_dim,
+        dtype=np.float32,
+    )
+
+    agent.remember(
+        state=state,
+        action=0,
+        reward=-1.0,
+        next_state=next_state,
+        terminated=False,
+        truncated=True,
+    )
+
+    transition = agent.memory.buffer[-1]
+
+    stored_terminal = transition[4]
+
+    assert stored_terminal is False
+
+
+def test_normal_transition_is_not_terminal():
+    """
+    A normal transition should continue Bellman
+    bootstrapping.
+    """
+
+    env = create_test_environment()
+
+    agent = DQNAgent(
+        env=env,
+        batch_size=1,
+    )
+
+    state = np.zeros(
+        agent.input_dim,
+        dtype=np.float32,
+    )
+
+    next_state = np.ones(
+        agent.input_dim,
+        dtype=np.float32,
+    )
+
+    agent.remember(
+        state=state,
+        action=0,
+        reward=-1.0,
+        next_state=next_state,
+        terminated=False,
+        truncated=False,
+    )
+
+    transition = agent.memory.buffer[-1]
+
+    stored_terminal = transition[4]
+
+    assert stored_terminal is False
+
+
+def test_replay_sample_preserves_terminal_mask():
+    """
+    Replay sampling should distinguish a genuine terminal
+    transition from a max-step truncation.
+
+    Expected stored masks:
+        termination -> 1.0
+        truncation  -> 0.0
+    """
+
+    env = create_test_environment()
+
+    agent = DQNAgent(
+        env=env,
+        batch_size=2,
+    )
+
+    state = np.zeros(
+        agent.input_dim,
+        dtype=np.float32,
+    )
+
+    next_state = np.ones(
+        agent.input_dim,
+        dtype=np.float32,
+    )
+
+    # --------------------------------------------------------
+    # Genuine successful termination
+    # --------------------------------------------------------
+
+    agent.remember(
+        state=state,
+        action=0,
+        reward=1.0,
+        next_state=next_state,
+        terminated=True,
+        truncated=False,
+    )
+
+    # --------------------------------------------------------
+    # Max-step truncation
+    # --------------------------------------------------------
+
+    agent.remember(
+        state=state,
+        action=1,
+        reward=-1.0,
+        next_state=next_state,
+        terminated=False,
+        truncated=True,
+    )
+
+    (
+        states,
+        actions,
+        rewards,
+        next_states,
+        terminateds,
+    ) = agent.memory.sample(
+        2
+    )
+
+    terminal_values = sorted(
+        terminateds.tolist()
+    )
+
+    assert terminal_values == [
+        0.0,
+        1.0,
+    ]

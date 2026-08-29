@@ -22,11 +22,12 @@ class DQN(nn.Module):
          ...
          remaining_pick_96]
 
-    For the final warehouse:
+    For the fixed warehouse:
         input_dim = 98
 
     Output:
-        Q-value for each of the four movement actions:
+        Q-value for each movement action:
+
         0 = up
         1 = down
         2 = left
@@ -37,18 +38,27 @@ class DQN(nn.Module):
         self,
         input_dim,
         n_actions=4,
-        hidden_dim=256
+        hidden_dim=256,
     ):
         super().__init__()
 
         self.network = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
+            nn.Linear(
+                input_dim,
+                hidden_dim,
+            ),
             nn.ReLU(),
 
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(
+                hidden_dim,
+                hidden_dim,
+            ),
             nn.ReLU(),
 
-            nn.Linear(hidden_dim, n_actions)
+            nn.Linear(
+                hidden_dim,
+                n_actions,
+            ),
         )
 
     def forward(self, x):
@@ -61,7 +71,7 @@ class DQN(nn.Module):
 
 class ReplayBuffer:
     """
-    Stores transitions from previous environment interactions.
+    Store transitions from previous environment interactions.
 
     Each transition contains:
 
@@ -69,15 +79,34 @@ class ReplayBuffer:
         action
         reward
         next_state
-        done
+        terminated
 
-    where done should be True when either:
-        - the episode terminates successfully, or
-        - the episode is truncated.
+    Important
+    ---------
+    Only genuine environment termination is stored in the
+    Bellman terminal mask.
+
+    In this project:
+
+        terminated = True
+            All required picks have been collected and the
+            picker has returned to the depot.
+
+        truncated = True
+            The artificial max_steps limit was reached.
+
+    A truncated transition is NOT treated as terminal for
+    the Bellman target. The agent therefore continues to
+    bootstrap from next_state for truncated transitions.
     """
 
-    def __init__(self, capacity=10000):
-        self.buffer = deque(maxlen=capacity)
+    def __init__(
+        self,
+        capacity=10000,
+    ):
+        self.buffer = deque(
+            maxlen=capacity
+        )
 
     def push(
         self,
@@ -85,51 +114,87 @@ class ReplayBuffer:
         action,
         reward,
         next_state,
-        done
+        terminated,
     ):
-        # Store copies so later changes to an environment state
-        # cannot accidentally change experiences already stored.
+        """
+        Store one transition.
+
+        Copies are used so that later modifications to an
+        environment state cannot alter replay history.
+        """
+
         self.buffer.append(
             (
-                np.array(state, dtype=np.float32).copy(),
-                action,
-                reward,
-                np.array(next_state, dtype=np.float32).copy(),
-                done
+                np.array(
+                    state,
+                    dtype=np.float32,
+                ).copy(),
+
+                int(action),
+
+                float(reward),
+
+                np.array(
+                    next_state,
+                    dtype=np.float32,
+                ).copy(),
+
+                bool(terminated),
             )
         )
 
-    def sample(self, batch_size):
+    def sample(
+        self,
+        batch_size,
+    ):
+        """
+        Sample one random mini-batch.
+        """
+
         batch = random.sample(
             self.buffer,
-            batch_size
+            batch_size,
         )
 
-        states, actions, rewards, next_states, dones = zip(*batch)
+        (
+            states,
+            actions,
+            rewards,
+            next_states,
+            terminateds,
+        ) = zip(
+            *batch
+        )
 
         states = torch.tensor(
-            np.stack(states),
-            dtype=torch.float32
+            np.stack(
+                states
+            ),
+            dtype=torch.float32,
         )
 
         actions = torch.tensor(
             actions,
-            dtype=torch.long
-        ).unsqueeze(1)
+            dtype=torch.long,
+        ).unsqueeze(
+            1
+        )
 
         rewards = torch.tensor(
             rewards,
-            dtype=torch.float32
+            dtype=torch.float32,
         )
 
         next_states = torch.tensor(
-            np.stack(next_states),
-            dtype=torch.float32
+            np.stack(
+                next_states
+            ),
+            dtype=torch.float32,
         )
 
-        dones = torch.tensor(
-            dones,
-            dtype=torch.float32
+        terminateds = torch.tensor(
+            terminateds,
+            dtype=torch.float32,
         )
 
         return (
@@ -137,11 +202,13 @@ class ReplayBuffer:
             actions,
             rewards,
             next_states,
-            dones
+            terminateds,
         )
 
     def __len__(self):
-        return len(self.buffer)
+        return len(
+            self.buffer
+        )
 
 
 # ============================================================
@@ -161,7 +228,7 @@ class DQNAgent:
         batch_size=64,
         buffer_capacity=10000,
         target_update=1000,
-        hidden_dim=256
+        hidden_dim=256,
     ):
 
         self.env = env
@@ -180,11 +247,11 @@ class DQNAgent:
         # State and action dimensions
         # ----------------------------------------------------
 
-        # State =
-        # 2 normalised coordinates
-        # + one binary value for every fixed pick location.
         self.input_dim = (
-            2 + len(env.all_pick_locations)
+            2
+            + len(
+                env.all_pick_locations
+            )
         )
 
         self.n_actions = 4
@@ -196,8 +263,10 @@ class DQNAgent:
         self.policy_net = DQN(
             input_dim=self.input_dim,
             n_actions=self.n_actions,
-            hidden_dim=hidden_dim
-        ).to(self.device)
+            hidden_dim=hidden_dim,
+        ).to(
+            self.device
+        )
 
         # ----------------------------------------------------
         # Target network
@@ -206,10 +275,11 @@ class DQNAgent:
         self.target_net = DQN(
             input_dim=self.input_dim,
             n_actions=self.n_actions,
-            hidden_dim=hidden_dim
-        ).to(self.device)
+            hidden_dim=hidden_dim,
+        ).to(
+            self.device
+        )
 
-        # Start target network with the same weights.
         self.target_net.load_state_dict(
             self.policy_net.state_dict()
         )
@@ -222,7 +292,7 @@ class DQNAgent:
 
         self.optimizer = optim.Adam(
             self.policy_net.parameters(),
-            lr=lr
+            lr=lr,
         )
 
         # ----------------------------------------------------
@@ -244,13 +314,17 @@ class DQNAgent:
         self.epsilon_decay = epsilon_decay
 
         self.batch_size = batch_size
+
         self.target_update = target_update
 
+        # Number of gradient updates performed.
         self.steps_done = 0
 
-        # Huber loss is commonly used for DQN because
-        # it is less sensitive to very large TD errors.
-        self.loss_function = nn.SmoothL1Loss()
+        # Huber loss is commonly used for DQN because it is
+        # less sensitive to unusually large TD errors.
+        self.loss_function = (
+            nn.SmoothL1Loss()
+        )
 
     # ========================================================
     # ACTION SELECTION
@@ -259,47 +333,58 @@ class DQNAgent:
     def select_action(
         self,
         state,
-        eval_mode=False
+        eval_mode=False,
     ):
         """
         Select an action using epsilon-greedy exploration.
 
-        During training:
-            random action with probability epsilon.
+        Training
+        --------
+        Random action with probability epsilon.
 
-        During evaluation:
-            always choose the action with the highest Q-value.
+        Evaluation
+        ----------
+        If eval_mode=True, always choose the action with
+        the largest policy-network Q-value.
         """
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Exploration
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         if (
             not eval_mode
-            and random.random() < self.epsilon
+            and random.random()
+            < self.epsilon
         ):
+
             return random.randrange(
                 self.n_actions
             )
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Exploitation
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
-        state_tensor = torch.tensor(
+        state_tensor = torch.as_tensor(
             state,
-            dtype=torch.float32
-        ).unsqueeze(0).to(self.device)
+            dtype=torch.float32,
+            device=self.device,
+        ).unsqueeze(
+            0
+        )
 
         with torch.no_grad():
+
             q_values = self.policy_net(
                 state_tensor
             )
 
-        action = q_values.argmax(
-            dim=1
-        ).item()
+        action = int(
+            q_values.argmax(
+                dim=1
+            ).item()
+        )
 
         return action
 
@@ -317,17 +402,24 @@ class DQNAgent:
         truncated
     ):
         """
-        Add one environment transition to replay memory.
-        """
+        Store one environment transition.
 
-        done = terminated or truncated
+        terminated=True:
+            genuine task completion, so Bellman
+            bootstrapping must stop.
+
+        truncated=True:
+            artificial max_steps cutoff, so the
+            rollout stops but Bellman bootstrapping
+            should continue.
+        """
 
         self.memory.push(
             state,
             action,
             reward,
             next_state,
-            done
+            terminated
         )
 
     # ========================================================
@@ -336,36 +428,67 @@ class DQNAgent:
 
     def train_step(self):
         """
-        Sample a mini-batch from replay memory and perform
-        one DQN optimisation step.
+        Sample a replay mini-batch and perform one DQN
+        optimisation step.
+
+        Bellman target:
+
+            y =
+                r
+                + gamma
+                * (1 - terminated)
+                * max_a' Q_target(s', a')
+
+        Truncated transitions therefore continue to bootstrap.
         """
 
-        if len(self.memory) < self.batch_size:
+        if (
+            len(
+                self.memory
+            )
+            < self.batch_size
+        ):
             return None
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Sample replay batch
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         (
             states,
             actions,
             rewards,
             next_states,
-            dones
+            terminateds,
         ) = self.memory.sample(
             self.batch_size
         )
 
-        states = states.to(self.device)
-        actions = actions.to(self.device)
-        rewards = rewards.to(self.device)
-        next_states = next_states.to(self.device)
-        dones = dones.to(self.device)
+        states = states.to(
+            self.device
+        )
 
-        # -----------------------------------------------
+        actions = actions.to(
+            self.device
+        )
+
+        rewards = rewards.to(
+            self.device
+        )
+
+        next_states = next_states.to(
+            self.device
+        )
+
+        terminateds = terminateds.to(
+            self.device
+        )
+
+        # ----------------------------------------------------
         # Current Q-values
-        # -----------------------------------------------
+        # ----------------------------------------------------
+
+        self.policy_net.train()
 
         all_q_values = self.policy_net(
             states
@@ -373,117 +496,140 @@ class DQNAgent:
 
         q_values = all_q_values.gather(
             1,
-            actions
-        ).squeeze(1)
+            actions,
+        ).squeeze(
+            1
+        )
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Target Q-values
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         with torch.no_grad():
 
             next_q_values = (
-                self.target_net(next_states)
-                .max(dim=1)
+                self.target_net(
+                    next_states
+                )
+                .max(
+                    dim=1
+                )
                 .values
             )
 
             targets = (
                 rewards
-                + (1.0 - dones)
+                + (
+                    1.0
+                    - terminateds
+                )
                 * self.gamma
                 * next_q_values
             )
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Loss
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         loss = self.loss_function(
             q_values,
-            targets
+            targets,
         )
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Backpropagation
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         self.optimizer.zero_grad()
 
         loss.backward()
 
-        # Optional protection against very large gradients.
         torch.nn.utils.clip_grad_norm_(
             self.policy_net.parameters(),
-            max_norm=10.0
+            max_norm=10.0,
         )
 
         self.optimizer.step()
 
-        # -----------------------------------------------
-        # Update step counter
-        # -----------------------------------------------
+        # ----------------------------------------------------
+        # Training-update counter
+        # ----------------------------------------------------
 
         self.steps_done += 1
 
-        # -----------------------------------------------
-        # Update target network
-        # -----------------------------------------------
+        # ----------------------------------------------------
+        # Target-network update
+        # ----------------------------------------------------
 
         if (
             self.steps_done
             % self.target_update
             == 0
         ):
+
             self.target_net.load_state_dict(
                 self.policy_net.state_dict()
             )
 
-        # -----------------------------------------------
-        # Reduce exploration
-        # -----------------------------------------------
+            self.target_net.eval()
+
+        # ----------------------------------------------------
+        # Exploration decay
+        # ----------------------------------------------------
 
         self.epsilon = max(
             self.epsilon_min,
             self.epsilon
-            * self.epsilon_decay
+            * self.epsilon_decay,
         )
 
-        return loss.item()
+        return float(
+            loss.item()
+        )
 
     # ========================================================
     # SAVE MODEL
     # ========================================================
 
-    def save(self, filepath):
+    def save(
+        self,
+        filepath,
+    ):
         """
-        Save the learned policy network.
+        Save the policy-network parameters.
         """
 
         torch.save(
             self.policy_net.state_dict(),
-            filepath
+            filepath,
         )
 
     # ========================================================
     # LOAD MODEL
     # ========================================================
 
-    def load(self, filepath):
+    def load(
+        self,
+        filepath,
+    ):
         """
-        Load a previously trained policy.
+        Load previously saved policy-network parameters and
+        synchronise the target network.
         """
 
+        state_dict = torch.load(
+            filepath,
+            map_location=self.device,
+        )
+
         self.policy_net.load_state_dict(
-            torch.load(
-                filepath,
-                map_location=self.device
-            )
+            state_dict
         )
 
         self.target_net.load_state_dict(
-            self.policy_net.state_dict()
+            state_dict
         )
 
         self.policy_net.eval()
+
         self.target_net.eval()
