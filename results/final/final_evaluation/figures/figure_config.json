@@ -1,0 +1,25 @@
+{
+    "png_dpi": 300,
+    "order_sizes": [
+        5,
+        10,
+        15,
+        20
+    ],
+    "distributions": [
+        "uniform",
+        "clustered"
+    ],
+    "methods": [
+        "DQN",
+        "S-shape",
+        "Return",
+        "Largest Gap"
+    ],
+    "completion_error_bars": "Wilson 95% confidence intervals",
+    "optimality_gap_subset": "completed DQN orders only",
+    "paired_distance_definition": "DQN distance - heuristic distance",
+    "additional_training": false,
+    "additional_simulation": false,
+    "additional_statistical_testing": false
+}
