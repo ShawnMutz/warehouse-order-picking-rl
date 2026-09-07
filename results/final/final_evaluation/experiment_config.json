@@ -1,0 +1,42 @@
+{
+    "run_name": "final_evaluation",
+    "phase": "final_test",
+    "source_model": "/Users/shawnmut/Documents/warehouse-order-picking-rl/results/development/set_dqn_mixed_consolidation_5_10_15_20_3_cycles/set_dqn_best_model.pt",
+    "model_frozen": true,
+    "additional_training": false,
+    "order_sizes": [
+        5,
+        10,
+        15,
+        20
+    ],
+    "distributions": [
+        "uniform",
+        "clustered"
+    ],
+    "orders_per_condition": 50,
+    "total_orders": 400,
+    "final_seed_starts": {
+        "uniform_5": 500000,
+        "uniform_10": 510000,
+        "uniform_15": 520000,
+        "uniform_20": 530000,
+        "clustered_5": 540000,
+        "clustered_10": 550000,
+        "clustered_15": 560000,
+        "clustered_20": 570000
+    },
+    "max_steps": 250,
+    "methods": [
+        "DQN",
+        "S-shape",
+        "Return",
+        "Largest Gap",
+        "Exact"
+    ],
+    "optimality_gap_formula": "(method - exact) / exact * 100",
+    "dqn_vs_heuristic_formula": "(heuristic - dqn) / heuristic * 100",
+    "dqn_incomplete_policy": "partial distance stored diagnostically; excluded from route-quality comparisons",
+    "evaluation_seed": 42,
+    "device": "cpu"
+}
