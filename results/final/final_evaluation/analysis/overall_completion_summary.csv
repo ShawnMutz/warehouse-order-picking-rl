@@ -1,0 +1,3 @@
+distribution,orders,completed,failures,completion_rate,wilson_95_lower,wilson_95_upper
+uniform,200,178,22,89.0,83.90730900269851,92.62275553987469
+clustered,200,135,65,67.5,60.73198511602996,73.60842846076571

@@ -1,0 +1,29 @@
+{
+    "input": "/Users/shawnmut/Documents/warehouse-order-picking-rl/results/final/final_evaluation/final_results.csv",
+    "alpha": 0.05,
+    "confidence_level": 0.95,
+    "completion_interval": "Wilson score interval",
+    "completion_distribution_test": "two-sided Fisher exact",
+    "completion_multiple_testing": "Holm across 4 order sizes",
+    "paired_route_test": "two-sided Wilcoxon signed-rank",
+    "paired_route_multiple_testing": "Holm across 3 heuristics within each condition",
+    "paired_route_subset": "completed DQN orders only",
+    "paired_difference": "DQN distance - heuristic distance",
+    "order_sizes": [
+        5,
+        10,
+        15,
+        20
+    ],
+    "distributions": [
+        "uniform",
+        "clustered"
+    ],
+    "heuristics": [
+        "S-shape",
+        "Return",
+        "Largest Gap"
+    ],
+    "additional_training": false,
+    "additional_simulation": false
+}

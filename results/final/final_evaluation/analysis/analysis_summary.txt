@@ -1,0 +1,89 @@
+FINAL RESULT STATISTICAL ANALYSIS
+========================================================================
+
+1. DQN COMPLETION BY CONDITION
+------------------------------------------------------------------------
+uniform   |  5 picks | 40/50 = 80.0% | Wilson 95% CI [67.0, 88.8]
+uniform   | 10 picks | 48/50 = 96.0% | Wilson 95% CI [86.5, 98.9]
+uniform   | 15 picks | 46/50 = 92.0% | Wilson 95% CI [81.2, 96.8]
+uniform   | 20 picks | 44/50 = 88.0% | Wilson 95% CI [76.2, 94.4]
+clustered |  5 picks | 31/50 = 62.0% | Wilson 95% CI [48.2, 74.1]
+clustered | 10 picks | 37/50 = 74.0% | Wilson 95% CI [60.4, 84.1]
+clustered | 15 picks | 38/50 = 76.0% | Wilson 95% CI [62.6, 85.7]
+clustered | 20 picks | 29/50 = 58.0% | Wilson 95% CI [44.2, 70.6]
+
+Overall descriptive completion:
+  uniform  : 178/200 = 89.0% (95% CI 83.9-92.6%)
+  clustered: 135/200 = 67.5% (95% CI 60.7-73.6%)
+
+2. UNIFORM VS CLUSTERED COMPLETION
+------------------------------------------------------------------------
+Two-sided Fisher exact tests; Holm correction across 4 order sizes.
+ 5 picks | uniform 80.0% | clustered 62.0% | change -18.0 pp | p(raw)=0.077 | p(Holm)=0.108 | significant=False
+10 picks | uniform 96.0% | clustered 74.0% | change -22.0 pp | p(raw)=0.004 | p(Holm)=0.011 | significant=True
+15 picks | uniform 92.0% | clustered 76.0% | change -16.0 pp | p(raw)=0.054 | p(Holm)=0.108 | significant=False
+20 picks | uniform 88.0% | clustered 58.0% | change -30.0 pp | p(raw)=0.001 | p(Holm)=0.005 | significant=True
+
+3. PAIRED DQN VS HEURISTICS
+------------------------------------------------------------------------
+Completed DQN orders only. Difference = DQN - heuristic; positive means DQN is longer.
+Wilcoxon tests are two-sided with Holm correction across the 3 heuristics within each condition.
+
+UNIFORM | 5 PICKS
+  S-shape     | n=40 | W/T/L=19/2/19 | mean diff=-1.80 | median diff=+0.00 | mean improvement=+0.82% | p(Holm)=0.522 | performed
+  Return      | n=40 | W/T/L=0/40/0 | mean diff=+0.00 | median diff=+0.00 | mean improvement=+0.00% | p(Holm)=NA | all_pairs_equal_no_test
+  Largest Gap | n=40 | W/T/L=3/0/37 | mean diff=+15.80 | median diff=+16.00 | mean improvement=-23.51% | p(Holm)=<0.001 | performed
+
+UNIFORM | 10 PICKS
+  S-shape     | n=48 | W/T/L=13/2/33 | mean diff=+6.67 | median diff=+8.00 | mean improvement=-6.64% | p(Holm)=0.005 | performed
+  Return      | n=48 | W/T/L=0/48/0 | mean diff=+0.00 | median diff=+0.00 | mean improvement=+0.00% | p(Holm)=NA | all_pairs_equal_no_test
+  Largest Gap | n=48 | W/T/L=1/0/47 | mean diff=+29.46 | median diff=+28.00 | mean improvement=-33.01% | p(Holm)=<0.001 | performed
+
+UNIFORM | 15 PICKS
+  S-shape     | n=46 | W/T/L=6/0/40 | mean diff=+21.74 | median diff=+25.00 | mean improvement=-17.87% | p(Holm)=<0.001 | performed
+  Return      | n=46 | W/T/L=0/46/0 | mean diff=+0.00 | median diff=+0.00 | mean improvement=+0.00% | p(Holm)=NA | all_pairs_equal_no_test
+  Largest Gap | n=46 | W/T/L=0/0/46 | mean diff=+37.35 | median diff=+39.00 | mean improvement=-34.27% | p(Holm)=<0.001 | performed
+
+UNIFORM | 20 PICKS
+  S-shape     | n=44 | W/T/L=0/0/44 | mean diff=+33.73 | median diff=+34.00 | mean improvement=-25.39% | p(Holm)=<0.001 | performed
+  Return      | n=44 | W/T/L=0/43/1 | mean diff=+0.09 | median diff=+0.00 | mean improvement=-0.05% | p(Holm)=NA | too_few_nonzero_pairs
+  Largest Gap | n=44 | W/T/L=0/0/44 | mean diff=+41.36 | median diff=+40.00 | mean improvement=-33.67% | p(Holm)=<0.001 | performed
+
+CLUSTERED | 5 PICKS
+  S-shape     | n=31 | W/T/L=19/1/11 | mean diff=-3.68 | median diff=-4.00 | mean improvement=+2.09% | p(Holm)=0.130 | performed
+  Return      | n=31 | W/T/L=0/31/0 | mean diff=+0.00 | median diff=+0.00 | mean improvement=+0.00% | p(Holm)=NA | all_pairs_equal_no_test
+  Largest Gap | n=31 | W/T/L=2/2/27 | mean diff=+7.74 | median diff=+8.00 | mean improvement=-14.65% | p(Holm)=<0.001 | performed
+
+CLUSTERED | 10 PICKS
+  S-shape     | n=37 | W/T/L=7/2/28 | mean diff=+5.46 | median diff=+4.00 | mean improvement=-7.84% | p(Holm)=<0.001 | performed
+  Return      | n=37 | W/T/L=0/37/0 | mean diff=+0.00 | median diff=+0.00 | mean improvement=+0.00% | p(Holm)=NA | all_pairs_equal_no_test
+  Largest Gap | n=37 | W/T/L=0/0/37 | mean diff=+17.19 | median diff=+18.00 | mean improvement=-29.16% | p(Holm)=<0.001 | performed
+
+CLUSTERED | 15 PICKS
+  S-shape     | n=38 | W/T/L=2/1/35 | mean diff=+11.42 | median diff=+12.00 | mean improvement=-15.32% | p(Holm)=<0.001 | performed
+  Return      | n=38 | W/T/L=0/38/0 | mean diff=+0.00 | median diff=+0.00 | mean improvement=+0.00% | p(Holm)=NA | all_pairs_equal_no_test
+  Largest Gap | n=38 | W/T/L=0/0/38 | mean diff=+21.16 | median diff=+21.00 | mean improvement=-33.27% | p(Holm)=<0.001 | performed
+
+CLUSTERED | 20 PICKS
+  S-shape     | n=29 | W/T/L=0/0/29 | mean diff=+14.83 | median diff=+16.00 | mean improvement=-20.68% | p(Holm)=<0.001 | performed
+  Return      | n=29 | W/T/L=0/29/0 | mean diff=+0.00 | median diff=+0.00 | mean improvement=+0.00% | p(Holm)=NA | all_pairs_equal_no_test
+  Largest Gap | n=29 | W/T/L=0/0/29 | mean diff=+21.86 | median diff=+22.00 | mean improvement=-34.08% | p(Holm)=<0.001 | performed
+
+4. PAIRED ROUTE-QUALITY GAPS
+------------------------------------------------------------------------
+Every method below is restricted to the same completed-DQN orders.
+uniform   |  5 picks | n=40 | DQN=29.12% | S=31.90% | R=29.12% | LG=4.75%
+uniform   | 10 picks | n=48 | DQN=38.24% | S=30.55% | R=38.24% | LG=4.24%
+uniform   | 15 picks | n=46 | DQN=43.10% | S=22.34% | R=43.10% | LG=6.81%
+uniform   | 20 picks | n=44 | DQN=44.37% | S=15.31% | R=44.28% | LG=8.31%
+clustered |  5 picks | n=31 | DQN=18.48% | S=23.89% | R=18.48% | LG=3.87%
+clustered | 10 picks | n=37 | DQN=35.64% | S=26.01% | R=35.64% | LG=5.34%
+clustered | 15 picks | n=38 | DQN=36.37% | S=18.34% | R=36.37% | LG=2.62%
+clustered | 20 picks | n=29 | DQN=36.50% | S=13.12% | R=36.50% | LG=1.85%
+
+INTERPRETATION NOTES
+------------------------------------------------------------------------
+* Incomplete DQN partial distance is not a valid route solution.
+* Direct route-quality comparisons use completed DQN orders only.
+* Lower OOD optimality gaps cannot alone imply better generalisation because the successful subset changes with completion.
+* Equal DQN/Return distances do not prove identical paths.
